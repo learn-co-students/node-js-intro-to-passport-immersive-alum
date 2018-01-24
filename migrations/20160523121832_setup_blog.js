@@ -5,6 +5,7 @@ exports.up = function(knex, Promise) {
       tbl.string('name');
       tbl.string('username').unique();
       tbl.string('email').unique();
+      tbl.string('password', 128);
       tbl.timestamps();
     }),
     knex.schema.createTableIfNotExists('posts', (tbl) => {
