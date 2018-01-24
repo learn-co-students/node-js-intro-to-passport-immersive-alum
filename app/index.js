@@ -2,19 +2,29 @@ const _ = require('lodash');
 const path = require('path');
 const bodyParser = require('body-parser');
 const express = require('express');
+const cookieParser = require('cookie-parser');
+const session = require('express-session');
 const knex = require('knex');
+const passport = require('passport');
+const LocalStrategy = require('passport-local').Strategy;
 const handlebars = require('express-handlebars');
+const flash = require('connect-flash');
 
 const ENV = process.env.NODE_ENV || 'development';
+
 const config = require('../knexfile');
 const db = knex(config[ENV]);
 
-// Initialize Express.
+  // Initialize Express.
 const app = express();
+app.use(bodyParser.urlencoded({extended: false}));
 app.use(bodyParser.json());
+app.use(session({ secret: 'some secret' }));
+app.use(flash());
+app.use(cookieParser());
 app.use(passport.initialize());
-
-// Configure handlebars templates.
+app.use(passport.session());
+  
 app.engine('handlebars', handlebars({
   defaultLayout: 'main',
   layoutsDir: path.join(__dirname, '/views/layouts')
@@ -22,116 +32,171 @@ app.engine('handlebars', handlebars({
 app.set('views', path.join(__dirname, '/views'));
 app.set('view engine', 'handlebars');
 
-// Configure & Initialize Bookshelf & Knex.
+ // Configure & Initialize Bookshelf & Knex.
 console.log(`Running in environment: ${ENV}`);
-
-// ***** Models ***** //
-
+ 
+ // ***** Models ***** //
+ 
 const Comment = require('./models/comment');
 const Post = require('./models/post');
 const User = require('./models/user');
-
-
-
-
-
-// ***** Server ***** //
-
-app.get('/user/:id', (req,res) => {
+  
+/// ***** Passport Strategies & Helpers ***** //
+  
+passport.use(new LocalStrategy((username, password, done) => {
   User
-    .forge({id: req.params.id})
+    .forge({ username: username })
     .fetch()
     .then((usr) => {
-      if (_.isEmpty(usr))
-        return res.sendStatus(404);
-      res.send(usr);
+      if (!usr) {
+        return done(null, false, { message: 'Incorrect username.' });
+      }
+      usr.validatePassword(password).then((valid) => {
+        if (!valid) {
+          return done(null, false, { message: 'Invalid password.' });
+        }
+        return done(null, usr);
+      });
     })
-    .catch((error) => {
-      console.error(error);
-      return res.sendStatus(500);
+    .catch((err) => {
+      return done(err);
     });
+}));
+  
+passport.serializeUser(function(user, done) {
+  done(null, user.id);
 });
-
-app.post('/user', (req, res) => {
-  if (_.isEmpty(req.body))
-    return res.sendStatus(400);
+  
+passport.deserializeUser(function(user, done) {
   User
-    .forge(req.body)
-    .save()
-    .then((usr) => {
-      res.send({id: usr.id});
-    })
-    .catch((error) => {
-      console.error(error);
-      return res.sendStatus(500);
-    });
-});
-
-app.get('/posts', (req, res) => {
-  Post
-    .collection()
+    .forge({id: user})
     .fetch()
-    .then((posts) => {
-      res.send(posts);
+    .then((usr) => {
+      done(null, usr);
     })
-    .catch((error) => {
-      res.sendStatus(500);
+    .catch((err) => {
+      done(err);
     });
 });
 
-app.get('/post/:id', (req,res) => {
-  Post
-    .forge({id: req.params.id})
-    .fetch({withRelated: ['author', 'comments']})
-    .then((post) => {
-      if (_.isEmpty(post))
-        return res.sendStatus(404);
-      res.send(post);
-    })
-    .catch((error) => {
-      console.error(error);
-      return res.sendStatus(500);
-    });
+const isAuthenticated = (req, res, done) => {
+  if (req.isAuthenticated()) {
+    return done();
+  }
+  res.redirect('/login');
+};
+  
+  // ***** Server ***** //
+  
+app.get('/user/:id', isAuthenticated, (req,res) => {
+    User
+      .forge({id: req.params.id})
+      .fetch()
+     .then((usr) => {
+       if (_.isEmpty(usr))
+         return res.sendStatus(404);
+       res.send(usr);
+     })
+     .catch((error) => {
+       console.error(error);
+       return res.sendStatus(500);
+      });
+  });
+  
+app.post('/user', isAuthenticated, (req, res) => {
+    if (_.isEmpty(req.body))
+      return res.sendStatus(400);
+    User
+     .forge(req.body)
+     .save()
+     .then((usr) => {
+       res.send({id: usr.id});
+     })
+     .catch((error) => {
+       console.error(error);
+       return res.sendStatus(500);
+      });
+  });
+  
+app.get('/posts', isAuthenticated, (req, res) => {
+    Post
+      .collection()
+      .fetch()
+     .then((posts) => {
+       res.send(posts);
+     })
+     .catch((error) => {
+       res.sendStatus(500);
+      });
+  });
+  
+app.get('/post/:id', isAuthenticated, (req,res) => {
+    Post
+      .forge({id: req.params.id})
+      .fetch({withRelated: ['author', 'comments']})
+     .then((post) => {
+       if (_.isEmpty(post))
+         return res.sendStatus(404);
+       res.send(post);
+     })
+     .catch((error) => {
+       console.error(error);
+       return res.sendStatus(500);
+      });
+  });
+  
+app.post('/post', isAuthenticated, (req, res) => {
+    if(_.isEmpty(req.body))
+      return res.sendStatus(400);
+    Post
+     .forge(req.body)
+     .save()
+     .then((post) => {
+       res.send({id: post.id});
+     })
+     .catch((error) => {
+       console.error(error);
+       return res.sendStatus(500);
+      });
+  });
+  
+app.post('/comment', isAuthenticated, (req, res) => {
+    if (_.isEmpty(req.body))
+      return res.sendStatus(400);
+    Comment
+     .forge(req.body)
+     .save()
+     .then((comment) => {
+       res.send({id: comment.id});
+     })
+     .catch((error) => {
+       console.error(error);
+       res.sendStatus(500);
+      });
+  });
+  
+app.get('/login', (req, res) => {
+  res.render('login', { message: req.flash('error') });
 });
 
-app.post('/post', (req, res) => {
-  if(_.isEmpty(req.body))
-    return res.sendStatus(400);
-  Post
-    .forge(req.body)
-    .save()
-    .then((post) => {
-      res.send({id: post.id});
-    })
-    .catch((error) => {
-      console.error(error);
-      return res.sendStatus(500);
-    });
-});
+app.post('/login',
+  passport.authenticate('local', {
+    failureRedirect: '/login',
+    failureFlash: true
+  }),
+  function(req, res) {
+    res.redirect('/posts');
+  });
 
-app.post('/comment', (req, res) => {
-  if (_.isEmpty(req.body))
-    return res.sendStatus(400);
-  Comment
-    .forge(req.body)
-    .save()
-    .then((comment) => {
-      res.send({id: comment.id});
-    })
-    .catch((error) => {
-      console.error(error);
-      res.sendStatus(500);
-    });
-});
 
-// Exports for Server Hoisting.
-
+  // Exports for Server Hoisting.
+  
 const listen = (port) => {
   return new Promise((resolve, reject) => {
     return resolve(app.listen(port));
   });
 };
-
+ 
 exports.up = (justBackend) => {
   return db.migrate.latest([ENV])
     .then(() => {
